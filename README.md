@@ -6,24 +6,27 @@ A simple recursive descent parser project, can be adapted to any kind of grammar
 
 This adaptation of the parser parses this grammar, using PEG notation:
 ```
-program   <- stmt*
+program     <- stmt*
 
-stmt      <- let_stmt
-          / expr
+stmt        <- let_stmt
+             / expr
 
-func_decl <- 'fn' ident '(' (ident (',' ident)*)? ')' '{' stmt* '}'
-struct    <- 'struct' ident '{' (ident ':' type (',' ident ':' type)*)? '}'
-let_stmt  <- 'let' ident '=' expr
+func_decl   <- 'fn' ident '(' (ident (',' ident)*)? ')' '{' stmt* '}'
+struct      <- 'struct' ident '{' (ident ':' type (',' ident ':' type)*)? '}'
+let_stmt    <- 'let' ident '=' expr
 
-expr      <- term ([+-] term)*
-term      <- factor ([*/] postfix)*
-postfix   <- primary ('.' ident)*
-primary   <- number
-           / string
-           / call
-           / ident
-           / list
-           / '(' expr ')'
-call      <- ident '(' (expr (',' expr)*)? ')'
-list      <- '[' (expr (',' expr)*)? ']'
+expr         <- comparison
+comparison   <- additive ([< > <= >= == !=] additive)*
+additive     <- term ([+-] term)*
+term         <- postfix ([*/] postfix)*
+postfix      <- primary ('.' ident)*
+primary      <- number
+              / string
+              / call
+              / ident
+              / list
+              / '(' expr ')'
+              
+call        <- ident '(' (expr (',' expr)*)? ')'
+list        <- '[' (expr (',' expr)*)? ']'
 ```

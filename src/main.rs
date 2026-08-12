@@ -13,6 +13,12 @@ enum Token {
     Minus,
     Mul,
     Div,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
+    EqEq,
+    NotEq,
     Comma,
     Colon,
     Let,
@@ -60,9 +66,44 @@ impl<'a> Lexer<'a> {
             b'*' => { self.advance(); Some(Token::Mul) }
             b'/' => { self.advance(); Some(Token::Div) }
             b',' => { self.advance(); Some(Token::Comma) }
-            b'=' => { self.advance(); Some(Token::Eq) }
             b':' => { self.advance(); Some(Token::Colon) }
             b'.' => { self.advance(); Some(Token::Dot) }
+            b'=' => {
+                self.advance();
+                if self.not_eof() && self.current() == b'=' {
+                    self.advance();
+                    Some(Token::EqEq)
+                } else {
+                    Some(Token::Eq)
+                }
+            }
+            b'!' => {
+                self.advance();
+                if self.not_eof() && self.current() == b'=' {
+                    self.advance();
+                    Some(Token::NotEq)
+                } else {
+                    None
+                }
+            }
+            b'<' => {
+                self.advance();
+                if self.not_eof() && self.current() == b'=' {
+                    self.advance();
+                    Some(Token::LtEq)
+                } else {
+                    Some(Token::Lt)
+                }
+            }
+            b'>' => {
+                self.advance();
+                if self.not_eof() && self.current() == b'=' {
+                    self.advance();
+                    Some(Token::GtEq)
+                } else {
+                    Some(Token::Gt)
+                }
+            }
             _ => {
                 if char::is_alphabetic(cur as char) {
                     let start = self.pos;
@@ -130,15 +171,6 @@ impl<'a> Lexer<'a> {
         self.source.as_bytes()[self.pos]
     }
 
-    /// Non consuming next token return
-    /// Simply save the previous position, advance, and reset
-    pub fn peek_ahead(&mut self) -> Option<Token> {
-        let prev_pos = self.pos;
-        let token = self.next();
-        self.pos = prev_pos;
-        token
-    }
-
     fn advance(&mut self) {
         if self.pos < self.source.len() { self.pos += 1; }
     }
@@ -155,6 +187,13 @@ impl<'a> Lexer<'a> {
 
 }
 
+/// An enum for binary operations
+#[derive(Debug, PartialEq, Clone)]
+enum BinOps {
+    Add, Sub, Mul, Div,
+    Lt, Gt, LtEq, GtEq, EqEq, NotEq,
+}
+
 /// Here is a simple AST enum variant.
 #[derive(Debug)]
 #[derive(PartialEq)]
@@ -163,7 +202,7 @@ enum Expr {
     String(String),
     Ident(String),
     List(Vec<Expr>),
-    BinOp { op: char, lhs: Box<Expr>, rhs: Box<Expr> },
+    BinOp { op: BinOps, lhs: Box<Expr>, rhs: Box<Expr> },
     Call { callee: String, args: Vec<Expr> },
     FieldAccess { receiver: Box<Expr>, field: String },
 }
@@ -258,16 +297,24 @@ impl<'a> Parser<'a> {
     }
 
     /// This is the first parse function of the parser,
-    /// Grammar being parsed: expr    <- term     (_ [+-] _ term)*
+    /// Grammar being parsed: expr        <- comparison
     fn parse_expr(&mut self) -> Result<Expr, ParseErr> {
-        let mut lhs = self.parse_term()?;
+        self.parse_comparison()
+    }
+
+    /// This is the second parse function of the parser,
+    /// Grammar being parsed: term    <- factor   (_ [*/] _ factor)*
+    fn parse_comparison(&mut self) -> Result<Expr, ParseErr> {
+        let mut lhs = self.parse_additive()?;
 
         while let Some(t) = &self.current {
-            // Because we're parsing an expression,
-            // We want to find + or -
             let op = match t {
-                Token::Plus => '+',
-                Token::Minus => '-',
+                Token::Lt    => BinOps::Lt,
+                Token::Gt    => BinOps::Gt,
+                Token::LtEq  => BinOps::LtEq,
+                Token::GtEq  => BinOps::GtEq,
+                Token::EqEq  => BinOps::EqEq,
+                Token::NotEq => BinOps::NotEq,
                 _ => break,
             };
 
@@ -279,7 +326,27 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
-    /// This is the second parse function of the parser,
+    /// This is the third parse function of the parser,
+    /// Gramamr being parsed: <- term ([+-] term)*
+    fn parse_additive(&mut self) -> Result<Expr, ParseErr> {
+        let mut lhs = self.parse_term()?;
+
+        while let Some(t) = &self.current {
+            let op = match t {
+                Token::Plus => BinOps::Add,
+                Token::Minus => BinOps::Sub,
+                _ => break
+            };
+
+            self.consume();
+            let rhs = self.parse_term()?;
+            lhs = Expr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+
+        Ok(lhs)
+    }
+
+    /// This is the third parse function of the parser,
     /// Grammar being parsed: term    <- factor   (_ [*/] _ factor)*
     fn parse_term(&mut self) -> Result<Expr, ParseErr> {
         // the reason why we're calling parse_factor her is to get the left side
@@ -293,20 +360,21 @@ impl<'a> Parser<'a> {
             // Because we're parsing an expression,
             // We want to find * or /
             let op = match t {
-                Token::Mul => '*',
-                Token::Div => '/',
+                Token::Mul => BinOps::Mul,
+                Token::Div => BinOps::Div,
                 _ => break,
             };
 
             self.consume();
-            let rhs = self.parse_factor()?;
+            let factor = self.parse_factor()?;
+            let rhs = self.parse_postfix(factor)?;
             lhs = Expr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
         }
 
         Ok(lhs)
     }
 
-    /// This is the third parse function of the parser,
+    /// This is the fourth parse function of the parser,
     /// Grammar being parsed: factor  <- '(' _ expr _ ')' / number
     fn parse_factor(&mut self) -> Result<Expr, ParseErr> {
         match self.consume() {
@@ -331,7 +399,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// This is the fourth parse function of the parser,
+    /// This is the fifth parse function of the parser,
     /// It handles postfix operations on a primary expr
     /// Grammar: postfix <- primary ('.' ident)*
     fn parse_postfix(&mut self, mut expr: Expr) -> Result<Expr, ParseErr> {
@@ -422,6 +490,8 @@ impl<'a> Parser<'a> {
         let mut fields = vec![];
 
         loop {
+            if self.current.as_ref() == Some(&Token::RCurl) { break; }
+
             let name = self.get_identifier_value()?;
             self.expect(Token::Colon, "expected ':' after field name")?;
             let ty = self.get_identifier_value()?;
@@ -488,30 +558,226 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// This simply evals all binary operations
-fn eval(expr: Expr) -> f64 {
-    match expr {
-        Expr::Number(n) => n,
-        Expr::BinOp { lhs, rhs, op } => {
-            let lhs = eval(*lhs);
-            let rhs = eval(*rhs);
-            
-            match op {
-                '+' => lhs + rhs,
-                '-' => lhs - rhs,
-                '*' => lhs * rhs,
-                '/' => lhs / rhs,
-                _ => unreachable!("invalid bin op"),
-            }
-        },
-        _ => todo!("eval not implemented for anything else")
-    }
-}
-
 fn main() {
     // now lets test it!!
     let source = r#"a.b.c.d"#;
     let mut parser = Parser::new(source);
     let program = parser.parse().unwrap();
     println!("{:#?}", program.stmts);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(src: &str) -> Program {
+        Parser::new(src).parse().unwrap()
+    }
+
+    fn expr(src: &str) -> Expr {
+        match parse(src).stmts.remove(0) {
+            Stmt::Expr(e) => e,
+            s => panic!("expected expr stmt, got {s:?}"),
+        }
+    }
+
+    #[test]
+    fn test_symbols() {
+        let tokens = Lexer::new("( ) [ ] { } + - * / , : . = == != < > <= >=").all();
+        assert_eq!(tokens, vec![
+            Token::LParen, Token::RParen, Token::LBrace, Token::RBrace,
+            Token::LCurl,  Token::RCurl,  Token::Plus,   Token::Minus,
+            Token::Mul,    Token::Div,    Token::Comma,  Token::Colon,
+            Token::Dot,    Token::Eq,     Token::EqEq,   Token::NotEq,
+            Token::Lt,     Token::Gt,     Token::LtEq,   Token::GtEq,
+        ]);
+    }
+
+    #[test]
+    fn test_keywords() {
+        assert_eq!(Lexer::new("let fn struct").all(), vec![Token::Let, Token::Fn, Token::Struct]);
+    }
+
+    #[test]
+    fn test_ident() {
+        assert_eq!(Lexer::new("foo").all(), vec![Token::Ident("foo".into())]);
+    }
+
+    #[test]
+    fn test_number_int() {
+        assert_eq!(Lexer::new("42").all(), vec![Token::Number(42.0)]);
+    }
+
+    #[test]
+    fn test_number_float() {
+        assert_eq!(Lexer::new("3.14").all(), vec![Token::Number(3.14)]);
+    }
+
+    #[test]
+    fn test_string() {
+        assert_eq!(Lexer::new(r#""hello""#).all(), vec![Token::String("hello".into())]);
+    }
+
+    #[test]
+    fn test_string_escape() {
+        assert_eq!(Lexer::new(r#""a\"b""#).all(), vec![Token::String(r#"a\"b"#.into())]);
+    }
+
+    #[test]
+    fn parse_number() {
+        assert_eq!(expr("1"), Expr::Number(1.0));
+    }
+
+    #[test]
+    fn parse_string() {
+        assert_eq!(expr(r#""hi""#), Expr::String("hi".into()));
+    }
+
+    #[test]
+    fn parse_ident() {
+        assert_eq!(expr("x"), Expr::Ident("x".into()));
+    }
+
+    #[test]
+    fn parse_binop_add() {
+        assert_eq!(expr("1 + 2"), Expr::BinOp {
+            op: BinOps::Add,
+            lhs: Box::new(Expr::Number(1.0)),
+            rhs: Box::new(Expr::Number(2.0)),
+        });
+    }
+
+    #[test]
+    fn parse_binop_precedence() {
+        assert_eq!(expr("1 + 2 * 3"), Expr::BinOp {
+            op: BinOps::Add,
+            lhs: Box::new(Expr::Number(1.0)),
+            rhs: Box::new(Expr::BinOp {
+                op: BinOps::Mul,
+                lhs: Box::new(Expr::Number(2.0)),
+                rhs: Box::new(Expr::Number(3.0)),
+            }),
+        });
+    }
+
+    #[test]
+    fn parse_grouped() {
+        assert_eq!(expr("(1 + 2) * 3"), Expr::BinOp {
+            op: BinOps::Mul,
+            lhs: Box::new(Expr::BinOp {
+                op: BinOps::Add,
+                lhs: Box::new(Expr::Number(1.0)),
+                rhs: Box::new(Expr::Number(2.0)),
+            }),
+            rhs: Box::new(Expr::Number(3.0)),
+        });
+    }
+
+    #[test]
+    fn parse_comparison() {
+        assert_eq!(expr("a == b"), Expr::BinOp {
+            op: BinOps::EqEq,
+            lhs: Box::new(Expr::Ident("a".into())),
+            rhs: Box::new(Expr::Ident("b".into())),
+        });
+    }
+
+    #[test]
+    fn parse_list() {
+        assert_eq!(expr("[1, 2, 3]"), Expr::List(vec![
+            Expr::Number(1.0), Expr::Number(2.0), Expr::Number(3.0),
+        ]));
+    }
+
+    #[test]
+    fn parse_call_no_args() {
+        assert_eq!(expr("foo()"), Expr::Call { callee: "foo".into(), args: vec![] });
+    }
+
+    #[test]
+    fn parse_call_args() {
+        assert_eq!(expr("foo(1, 2)"), Expr::Call {
+            callee: "foo".into(),
+            args: vec![Expr::Number(1.0), Expr::Number(2.0)],
+        });
+    }
+
+    #[test]
+    fn parse_field_access() {
+        assert_eq!(expr("a.b"), Expr::FieldAccess {
+            receiver: Box::new(Expr::Ident("a".into())),
+            field: "b".into(),
+        });
+    }
+
+    #[test]
+    fn parse_field_access_chain() {
+        assert_eq!(expr("a.b.c"), Expr::FieldAccess {
+            receiver: Box::new(Expr::FieldAccess {
+                receiver: Box::new(Expr::Ident("a".into())),
+                field: "b".into(),
+            }),
+            field: "c".into(),
+        });
+    }
+
+    #[test]
+    fn parse_let() {
+        assert_eq!(parse("let x = 1").stmts, vec![Stmt::Let {
+            name: "x".into(),
+            value: Expr::Number(1.0),
+        }]);
+    }
+
+    #[test]
+    fn parse_fn_no_params() {
+        assert_eq!(parse("fn f() {}").stmts, vec![Stmt::FnDecl {
+            name: "f".into(),
+            params: vec![],
+            body: vec![],
+        }]);
+    }
+
+    #[test]
+    fn parse_fn_with_body() {
+        assert_eq!(parse("fn f() { let x = 1 }").stmts, vec![Stmt::FnDecl {
+            name: "f".into(),
+            params: vec![],
+            body: vec![Stmt::Let { name: "x".into(), value: Expr::Number(1.0) }],
+        }]);
+    }
+
+    #[test]
+    fn parse_struct_empty() {
+        assert_eq!(parse("struct A {}").stmts, vec![Stmt::Struct {
+            name: "A".into(),
+            fields: vec![],
+        }]);
+    }
+
+    #[test]
+    fn parse_struct_fields() {
+        assert_eq!(parse("struct A { x: int, y: int }").stmts, vec![Stmt::Struct {
+            name: "A".into(),
+            fields: vec![
+                Field { name: "x".into(), ty: "int".into() },
+                Field { name: "y".into(), ty: "int".into() },
+            ],
+        }]);
+    }
+
+    #[test]
+    fn parse_struct_trailing_comma() {
+        assert!(Parser::new("struct A { x: int, }").parse().is_ok());
+    }
+
+    #[test]
+    fn parse_unexpected_eof() {
+        assert!(matches!(Parser::new("let x =").parse(), Err(ParseErr::UnexpectedEof)));
+    }
+
+    #[test]
+    fn parse_unexpected_token() {
+        assert!(matches!(Parser::new("let 123").parse(), Err(ParseErr::UnexpectedToken(_))));
+    }
 }
