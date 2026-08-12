@@ -115,7 +115,7 @@ impl<'a> Lexer<'a> {
 
     /// Non consuming next token return
     /// Simply save the previous position, advance, and reset
-    pub fn peek(&mut self) -> Option<Token> {
+    pub fn peek_ahead(&mut self) -> Option<Token> {
         let prev_pos = self.pos;
         let token = self.next();
         self.pos = prev_pos;
