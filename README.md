@@ -27,6 +27,7 @@ primary      <- number
               / list
               / '(' expr ')'
               
+if          <- 'if' expr '{' stmt* '}' ('else' '{' stmt* '}')?
 call        <- ident '(' (expr (',' expr)*)? ')'
 list        <- '[' (expr (',' expr)*)? ']'
 ```
