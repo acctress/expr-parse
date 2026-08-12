@@ -12,15 +12,18 @@ stmt      <- let_stmt
           / expr
 
 func_decl <- 'fn' ident '(' (ident (',' ident)*)? ')' '{' stmt* '}'
-
+struct    <- 'struct' ident '{' (ident ':' type (',' ident ':' type)*)? '}'
 let_stmt  <- 'let' ident '=' expr
 
 expr      <- term ([+-] term)*
-term      <- factor ([*/] factor)*
-factor    <- number
+term      <- factor ([*/] postfix)*
+postfix   <- primary ('.' ident)*
+primary   <- number
            / string
-           / ident
            / call
+           / ident
            / list
            / '(' expr ')'
+call      <- ident '(' (expr (',' expr)*)? ')'
+list      <- '[' (expr (',' expr)*)? ']'
 ```

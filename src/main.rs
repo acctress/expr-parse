@@ -1,5 +1,3 @@
-use crate::Token::{RBrace, RParen};
-
 /// For the lexer, I will be going with a very simple solution.
 /// Using Rust's ability of allowing enums to hold values.
 
@@ -16,9 +14,12 @@ enum Token {
     Mul,
     Div,
     Comma,
+    Colon,
     Let,
     Fn,
     Eq,
+    Dot,
+    Struct,
     Number(f64),
     Ident(String),
     String(String),
@@ -60,6 +61,8 @@ impl<'a> Lexer<'a> {
             b'/' => { self.advance(); Some(Token::Div) }
             b',' => { self.advance(); Some(Token::Comma) }
             b'=' => { self.advance(); Some(Token::Eq) }
+            b':' => { self.advance(); Some(Token::Colon) }
+            b'.' => { self.advance(); Some(Token::Dot) }
             _ => {
                 if char::is_alphabetic(cur as char) {
                     let start = self.pos;
@@ -69,16 +72,12 @@ impl<'a> Lexer<'a> {
                         self.advance();
                     }
 
-                    // We could define a map of keywords, or whatever idiomatic way is possible
-                    // But explictly comparing identifier values with known keywords is suitable here.
-                    let value = self.source[start..self.pos].to_string();
-                    if value == "let" {
-                        return Some(Token::Let)
-                    } else if value == "fn" {
-                        return Some(Token::Fn)
-                    }
-
-                    return Some(Token::Ident(value));
+                    return Some(match self.source[start..self.pos].as_ref() {
+                        "let"       => Token::Let,
+                        "fn"        => Token::Fn,
+                        "struct"    => Token::Struct,
+                        s           => Token::Ident(s.to_string())
+                    });
                 } else if char::is_digit(cur as char, 10) {
                     let start = self.pos;
                     let mut flt = false;
@@ -165,7 +164,14 @@ enum Expr {
     Ident(String),
     List(Vec<Expr>),
     BinOp { op: char, lhs: Box<Expr>, rhs: Box<Expr> },
-    Call { callee: String, args: Vec<Expr> }
+    Call { callee: String, args: Vec<Expr> },
+    FieldAccess { receiver: Box<Expr>, field: String },
+}
+
+#[derive(Debug, PartialEq)]
+struct Field {
+    name: String,
+    ty: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -179,6 +185,10 @@ enum Stmt {
         name: String,
         params: Vec<Expr>,
         body: Vec<Stmt>,
+    },
+    Struct {
+        name: String,
+        fields: Vec<Field>
     }
 }
 
@@ -242,6 +252,7 @@ impl<'a> Parser<'a> {
         match self.current {
             Some(Token::Let) => self.parse_let(),
             Some(Token::Fn) => self.parse_fn_decl(),
+            Some(Token::Struct) => self.parse_struct(),
             _ => Ok(Stmt::Expr(self.parse_expr()?)),
         }
     }
@@ -271,7 +282,12 @@ impl<'a> Parser<'a> {
     /// This is the second parse function of the parser,
     /// Grammar being parsed: term    <- factor   (_ [*/] _ factor)*
     fn parse_term(&mut self) -> Result<Expr, ParseErr> {
-        let mut lhs = self.parse_factor()?;
+        // the reason why we're calling parse_factor her is to get the left side
+        // postfix needs to wrap that result before */
+        // the chain of parsing looks like this: factor -> postfix -> term
+        // term is using postfix expression as lhs
+        let primary = self.parse_factor()?;
+        let mut lhs = self.parse_postfix(primary)?;
 
         while let Some(t) = &self.current {
             // Because we're parsing an expression,
@@ -315,12 +331,25 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// This is the fourth parse function of the parser,
+    /// It handles postfix operations on a primary expr
+    /// Grammar: postfix <- primary ('.' ident)*
+    fn parse_postfix(&mut self, mut expr: Expr) -> Result<Expr, ParseErr> {
+        while matches!(self.peek(), Some(Token::Dot)) {
+            self.consume();
+            let field = self.get_identifier_value()?;
+            expr = Expr::FieldAccess { receiver: Box::new(expr), field };
+        }
+
+        Ok(expr)
+    }
+
     /// Parse a function call
     /// Grammar being parsed: call  <- ident '(' (_ expr ',' _)* ')'
     fn parse_call(&mut self, callee: String) -> Result<Expr, ParseErr> {
         self.expect(Token::LParen, "expected '('")?;
 
-        let args = self.parse_list_of_exprs(RParen)?;
+        let args = self.parse_list_of_exprs(Token::RParen)?;
 
         // Expect the closing parenthesis
         self.expect(Token::RParen, "expected ')'")?;
@@ -331,7 +360,7 @@ impl<'a> Parser<'a> {
     /// Parse a list
     /// Grammar being parsed: list  <- '[' (_ expr ',' _)* ']'
     fn parse_list(&mut self) -> Result<Expr, ParseErr> {
-        let elements = self.parse_list_of_exprs(RBrace)?;
+        let elements = self.parse_list_of_exprs(Token::RBrace)?;
         self.expect(Token::RBrace, "expected ']'")?;
 
         Ok(Expr::List(elements))
@@ -379,6 +408,33 @@ impl<'a> Parser<'a> {
             params,
             body,
         })
+    }
+
+    /// Parser a structure declaration
+    /// Grammar: struct <- 'struct' ident '{' (ident ':' type (',' ident ':' type)*)? '}'
+    fn parse_struct(&mut self) -> Result<Stmt, ParseErr> {
+        self.consume();
+
+        let name = self.get_identifier_value()?;
+
+        self.expect(Token::LCurl, "expected '{' after struct name")?;
+
+        let mut fields = vec![];
+
+        loop {
+            let name = self.get_identifier_value()?;
+            self.expect(Token::Colon, "expected ':' after field name")?;
+            let ty = self.get_identifier_value()?;
+
+            fields.push(Field { name, ty });
+
+            if self.current.as_ref() == Some(&Token::RCurl) { break; }
+            self.expect(Token::Comma, "expected ','")?;
+        }
+
+        self.expect(Token::RCurl, "expected '}'")?;
+
+        Ok(Stmt::Struct { name, fields })
     }
 
     fn parse_list_of_exprs(&mut self, delim: Token) -> Result<Vec<Expr>, ParseErr> {
@@ -454,7 +510,7 @@ fn eval(expr: Expr) -> f64 {
 
 fn main() {
     // now lets test it!!
-    let source = r#"fn test(a, b) { let x = a + b print(x) }"#;
+    let source = r#"a.b.c.d"#;
     let mut parser = Parser::new(source);
     let program = parser.parse().unwrap();
     println!("{:#?}", program.stmts);
