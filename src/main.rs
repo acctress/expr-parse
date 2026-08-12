@@ -1,5 +1,3 @@
-use std::string::ParseError;
-
 /// For the lexer, I will be going with a very simple solution.
 /// Using Rust's ability of allowing enums to hold values.
 
@@ -13,7 +11,6 @@ enum Token {
     Div,
     Number(f64),
     Ident(String),
-    EOF
 }
 
 /// This lexer will follow a pattern of generating one token at a time, or a vector of tokens.
@@ -255,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_do_parens_override_precedence_hehehe() {
-        /// + should be first
+        /// * should be first
         assert!(matches!(parse("(1 + 2) * 3"), Expr::BinOp { op: '*', .. }));
     }
 
