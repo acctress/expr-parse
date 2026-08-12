@@ -208,12 +208,33 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// This simply evals all binary operations
+fn eval(expr: Expr) -> f64 {
+    match expr {
+        Expr::Number(n) => n,
+        Expr::BinOp { lhs, rhs, op } => {
+            let lhs = eval(*lhs);
+            let rhs = eval(*rhs);
+            
+            match op {
+                '+' => lhs + rhs,
+                '-' => lhs - rhs,
+                '*' => lhs * rhs,
+                '/' => lhs / rhs,
+                _ => unreachable!("invalid bin op"),
+            }
+        },
+        _ => todo!("eval not implemented for anything else")
+    }
+}
+
 fn main() {
     // now lets test it!!
     let source = "1 + 2";
     let mut parser = Parser::new(source);
-    let expr = parser.parse();
+    let expr = parser.parse().unwrap();
     println!("{:#?}", expr);
+    println!("{}", eval(expr));
 }
 
 #[cfg(test)]
