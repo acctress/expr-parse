@@ -1,6 +1,6 @@
 # expr-parse
 
-A simple to follow "template" recursive descent expression parser project, can be adapted to any kind of grammar.
+A simple recursive descent parser project, can be adapted to any kind of grammar.
 
 # Grammar
 
