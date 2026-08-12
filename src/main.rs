@@ -1,3 +1,5 @@
+use crate::Expr::Ident;
+
 /// For the lexer, I will be going with a very simple solution.
 /// Using Rust's ability of allowing enums to hold values.
 
@@ -5,12 +7,16 @@
 enum Token {
     LParen,     /// We don't need to hold a value for tokens alike, their enum names tells us everthing we need
     RParen,
+    LBrace,
+    RBrace,
     Plus,
     Minus,
     Mul,
     Div,
+    Comma,
     Number(f64),
     Ident(String),
+    String(String),
 }
 
 /// This lexer will follow a pattern of generating one token at a time, or a vector of tokens.
@@ -35,19 +41,22 @@ impl<'a> Lexer<'a> {
             return None;
         }
 
-        let cur = self.source.as_bytes()[self.pos];
+        let cur = self.current();
         match cur {
             b'(' => { self.advance(); Some(Token::LParen) }
             b')' => { self.advance(); Some(Token::RParen) }
+            b'[' => { self.advance(); Some(Token::LBrace) }
+            b']' => { self.advance(); Some(Token::RBrace) }
             b'+' => { self.advance(); Some(Token::Plus) }
             b'-' => { self.advance(); Some(Token::Minus) }
             b'*' => { self.advance(); Some(Token::Mul) }
             b'/' => { self.advance(); Some(Token::Div) }
+            b',' => { self.advance(); Some(Token::Comma) }
             _ => {
                 if char::is_alphabetic(cur as char) {
                     let start = self.pos;
                     while self.not_eof()
-                        && char::is_alphanumeric(self.source.as_bytes()[self.pos] as char)
+                        && char::is_alphanumeric(self.current() as char)
                     {
                         self.advance();
                     }
@@ -56,7 +65,7 @@ impl<'a> Lexer<'a> {
                     let start = self.pos;
                     let mut flt = false;
                     while self.not_eof() {
-                        let b = self.source.as_bytes()[self.pos];
+                        let b = self.current();
                         if char::is_digit(b as char, 10) {
                             self.advance();
                         } else if b == b'.' && !flt {
@@ -68,6 +77,27 @@ impl<'a> Lexer<'a> {
                     }
 
                     return Some(Token::Number(self.source[start..self.pos].parse().unwrap()));
+                } else if cur == b'"' {
+                    self.advance();
+                    let start = self.pos;
+
+                    while self.not_eof() {
+                        match self.current() {
+                            b'\\' => {
+                                self.advance();
+                                if self.not_eof() {
+                                    self.advance();
+                                }
+                            }
+                            b'"' => break,
+                            _ => self.advance(),
+                        }
+                    }
+
+                    let value = self.source[start..self.pos].to_string();
+                    self.advance();
+
+                    return Some(Token::String(value));
                 }
                 None
             }
@@ -79,12 +109,25 @@ impl<'a> Lexer<'a> {
         std::iter::from_fn(|| self.next()).collect()
     }
 
+    fn current(&self) -> u8 {
+        self.source.as_bytes()[self.pos]
+    }
+
+    /// Non consuming next token return
+    /// Simply save the previous position, advance, and reset
+    pub fn peek(&mut self) -> Option<Token> {
+        let prev_pos = self.pos;
+        let token = self.next();
+        self.pos = prev_pos;
+        token
+    }
+
     fn advance(&mut self) {
         if self.pos < self.source.len() { self.pos += 1; }
     }
 
     fn skip_ws(&mut self) {
-        while self.not_eof() && (self.source.as_bytes()[self.pos] as char).is_ascii_whitespace() {
+        while self.not_eof() && (self.current() as char).is_ascii_whitespace() {
             self.advance();
         }
     }
@@ -92,14 +135,19 @@ impl<'a> Lexer<'a> {
     fn not_eof(&self) -> bool {
         self.pos < self.source.len()
     }
+
 }
 
 /// Here is a simple AST enum variant.
 #[derive(Debug)]
+#[derive(PartialEq)]
 enum Expr {
     Number(f64),
+    String(String),
     Ident(String),
+    List(Vec<Expr>),
     BinOp { op: char, lhs: Box<Expr>, rhs: Box<Expr> },
+    Call { callee: String, args: Vec<Expr> }
 }
 
 /// It's good to define a custom error enum to handle errors cleanly.
@@ -195,7 +243,15 @@ impl<'a> Parser<'a> {
     fn parse_factor(&mut self) -> Result<Expr, ParseErr> {
         match self.consume() {
             Some(Token::Number(n)) => Ok(Expr::Number(n)),
-            Some(Token::Ident(s))  => Ok(Expr::Ident(s)),
+            Some(Token::String(s)) => Ok(Expr::String(s)),
+            Some(Token::LBrace) => Ok(self.parse_list()?),
+            Some(Token::Ident(s))  => {
+                if matches!(self.peek(), Some(Token::LParen)) {
+                    self.parse_call(s)
+                } else {
+                    Ok(Expr::Ident(s))
+                }
+            },
             Some(Token::LParen) => {
                 // Here we're parsing: '(' _ expr _ ')'
                 let expr = self.parse_expr()?; // this is what makes this recursive descent
@@ -205,6 +261,54 @@ impl<'a> Parser<'a> {
             Some(t) => Err(ParseErr::UnexpectedToken(t)),
             None    => Err(ParseErr::UnexpectedEof),
         }
+    }
+
+    /// Parse a function call
+    /// Grammar being parsed: call  <- ident '(' (_ expr ',' _)* ')'
+    fn parse_call(&mut self, callee: String) -> Result<Expr, ParseErr> {
+        self.expect(Token::LParen, "expected '('")?;
+
+        let mut args: Vec<Expr> = vec![];
+        // So while we're not matching against a ')' currently...
+        while !matches!(self.current, Some(Token::RParen)) {
+            // push args onto the vector
+            args.push(self.parse_expr()?);
+
+            // if we are a comma, then consume, else that's the end of the args list.
+            if matches!(self.current, Some(Token::Comma)) {
+                self.consume();
+            } else {
+                break;
+            }
+        }
+
+        // Expect the closing parenthesis
+        self.expect(Token::RParen, "expected ')'")?;
+
+        Ok(Expr::Call { callee, args })
+    }
+
+    /// Parse a list
+    /// Grammar being parsed: list  <- '[' (_ expr ',' _)* ']'
+    fn parse_list(&mut self) -> Result<Expr, ParseErr> {
+        let mut elements: Vec<Expr> = vec![];
+        // So while we're not matching against a ']' currently...
+        while !matches!(self.current, Some(Token::RBrace)) {
+            elements.push(self.parse_expr()?);
+
+            // if we are a comma, then consume, else that's the end of the list.
+            if matches!(self.current, Some(Token::Comma)) {
+                self.consume();
+            } else {
+                break;
+            }
+        }
+
+        Ok(Expr::List(elements))
+    }
+
+    fn peek(&self) -> Option<&Token> {
+        self.current.as_ref()
     }
 }
 
@@ -230,11 +334,10 @@ fn eval(expr: Expr) -> f64 {
 
 fn main() {
     // now lets test it!!
-    let source = "1 + 2";
+    let source = r#"print("hello world")"#;
     let mut parser = Parser::new(source);
     let expr = parser.parse().unwrap();
     println!("{:#?}", expr);
-    println!("{}", eval(expr));
 }
 
 #[cfg(test)]
@@ -243,6 +346,26 @@ mod tests {
 
     fn parse(src: &str) -> Expr {
         Parser::new(src).parse().unwrap()
+    }
+
+    #[test]
+    fn test_string() {
+        assert!(matches!(parse(r#""hi""#), Expr::String(s) if s == "hi"));
+    }
+
+    #[test]
+    fn test_list() {
+        let e = parse("[1, 2, 3, 4]");
+        println!("{:#?}", e);
+        assert!(matches!(
+            e,
+            Expr::List(items) if items == vec![
+                Expr::Number(1.0),
+                Expr::Number(2.0),
+                Expr::Number(3.0),
+                Expr::Number(4.0),
+            ]
+        ));
     }
 
     #[test]
