@@ -26,6 +26,8 @@ enum Token {
     Eq,
     Dot,
     Struct,
+    If,
+    Else,
     Number(f64),
     Ident(String),
     String(String),
@@ -117,6 +119,8 @@ impl<'a> Lexer<'a> {
                         "let"       => Token::Let,
                         "fn"        => Token::Fn,
                         "struct"    => Token::Struct,
+                        "if"        => Token::If,
+                        "else"      => Token::Else,
                         s           => Token::Ident(s.to_string())
                     });
                 } else if char::is_digit(cur as char, 10) {
@@ -205,6 +209,11 @@ enum Expr {
     BinOp { op: BinOps, lhs: Box<Expr>, rhs: Box<Expr> },
     Call { callee: String, args: Vec<Expr> },
     FieldAccess { receiver: Box<Expr>, field: String },
+    If {
+        cond: Box<Expr>,
+        then: Vec<Stmt>,
+        else_: Option<Vec<Stmt>>,
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -378,17 +387,18 @@ impl<'a> Parser<'a> {
     /// Grammar being parsed: factor  <- '(' _ expr _ ')' / number
     fn parse_factor(&mut self) -> Result<Expr, ParseErr> {
         match self.consume() {
-            Some(Token::Number(n)) => Ok(Expr::Number(n)),
-            Some(Token::String(s)) => Ok(Expr::String(s)),
-            Some(Token::LBrace) => Ok(self.parse_list()?),
-            Some(Token::Ident(s))  => {
+            Some(Token::Number(n))  => Ok(Expr::Number(n)),
+            Some(Token::String(s))  => Ok(Expr::String(s)),
+            Some(Token::LBrace)     => Ok(self.parse_list()?),
+            Some(Token::If)         => Ok(self.parse_if()?),
+            Some(Token::Ident(s))   => {
                 if matches!(self.peek(), Some(Token::LParen)) {
                     self.parse_call(s)
                 } else {
                     Ok(Expr::Ident(s))
                 }
             },
-            Some(Token::LParen) => {
+            Some(Token::LParen)     => {
                 // Here we're parsing: '(' _ expr _ ')'
                 let expr = self.parse_expr()?; // this is what makes this recursive descent
                 self.expect(Token::RParen, "expected ')'")?;
@@ -432,6 +442,26 @@ impl<'a> Parser<'a> {
         self.expect(Token::RBrace, "expected ']'")?;
 
         Ok(Expr::List(elements))
+    }
+
+    /// Parse an if expression
+    /// Grammar being parsed: if <- 'if' expr '{' stmt* '}' ('else' '{' stmt* '}')?
+    fn parse_if(&mut self) -> Result<Expr, ParseErr> {
+        // if is already consumed so we dont need to expect it here
+        let cond = self.parse_expr()?;
+        let then = self.parse_block()?;
+        let else_ = if matches!(self.current, Some(Token::Else)) {
+            self.consume();
+            Some(self.parse_block()?)
+        } else {
+            None
+        };
+
+        Ok(Expr::If {
+            cond: Box::new(cond),
+            then,
+            else_
+        })
     }
 
     /// Parse a let decl
@@ -560,7 +590,8 @@ impl<'a> Parser<'a> {
 
 fn main() {
     // now lets test it!!
-    let source = r#"a.b.c.d"#;
+    let source = r#"let x = if 2 == 2 { 2 } else { 4 }"#;
+    println!("{source}");
     let mut parser = Parser::new(source);
     let program = parser.parse().unwrap();
     println!("{:#?}", program.stmts);
@@ -764,6 +795,38 @@ mod tests {
                 Field { name: "y".into(), ty: "int".into() },
             ],
         }]);
+    }
+
+    #[test]
+    fn parse_if_no_else() {
+        assert_eq!(expr("if x { let y = 1 }"), Expr::If {
+            cond: Box::new(Expr::Ident("x".into())),
+            then: vec![Stmt::Let { name: "y".into(), value: Expr::Number(1.0) }],
+            else_: None,
+        });
+    }
+
+    #[test]
+    fn parse_if_else() {
+        assert_eq!(expr("if x { let y = 1 } else { let y = 2 }"), Expr::If {
+            cond: Box::new(Expr::Ident("x".into())),
+            then: vec![Stmt::Let { name: "y".into(), value: Expr::Number(1.0) }],
+            else_: Some(vec![Stmt::Let { name: "y".into(), value: Expr::Number(2.0) }]),
+        });
+    }
+
+    #[test]
+    fn parse_if_as_value() {
+        assert_eq!(parse("let x = if a { let y = 1 } else { let y = 2 }").stmts, vec![
+            Stmt::Let {
+                name: "x".into(),
+                value: Expr::If {
+                    cond: Box::new(Expr::Ident("a".into())),
+                    then: vec![Stmt::Let { name: "y".into(), value: Expr::Number(1.0) }],
+                    else_: Some(vec![Stmt::Let { name: "y".into(), value: Expr::Number(2.0) }]),
+                },
+            }
+        ]);
     }
 
     #[test]
