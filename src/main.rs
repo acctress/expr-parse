@@ -422,8 +422,8 @@ impl<'a> Parser<'a> {
     fn get_identifier_value(&mut self) -> Result<String, ParseErr> {
         match self.consume() {
             Some(Token::Ident(s)) => Ok(s),
-            Some(t) => return Err(ParseErr::UnexpectedToken(t)),
-            None => return Err(ParseErr::UnexpectedEof),
+            Some(t) => Err(ParseErr::UnexpectedToken(t)),
+            None => Err(ParseErr::UnexpectedEof),
         }
     }
 
