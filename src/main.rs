@@ -341,6 +341,8 @@ impl<'a> Parser<'a> {
             }
         }
 
+        self.expect(Token::RBrace, "expected ']'")?;
+
         Ok(Expr::List(elements))
     }
 
