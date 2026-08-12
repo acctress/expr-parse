@@ -1,3 +1,5 @@
+use crate::Token::{RBrace, RParen};
+
 /// For the lexer, I will be going with a very simple solution.
 /// Using Rust's ability of allowing enums to hold values.
 
@@ -7,12 +9,15 @@ enum Token {
     RParen,
     LBrace,
     RBrace,
+    LCurl,
+    RCurl,
     Plus,
     Minus,
     Mul,
     Div,
     Comma,
     Let,
+    Fn,
     Eq,
     Number(f64),
     Ident(String),
@@ -47,6 +52,8 @@ impl<'a> Lexer<'a> {
             b')' => { self.advance(); Some(Token::RParen) }
             b'[' => { self.advance(); Some(Token::LBrace) }
             b']' => { self.advance(); Some(Token::RBrace) }
+            b'{' => { self.advance(); Some(Token::LCurl) }
+            b'}' => { self.advance(); Some(Token::RCurl) }
             b'+' => { self.advance(); Some(Token::Plus) }
             b'-' => { self.advance(); Some(Token::Minus) }
             b'*' => { self.advance(); Some(Token::Mul) }
@@ -62,11 +69,13 @@ impl<'a> Lexer<'a> {
                         self.advance();
                     }
 
-                    /// We could define a map of keywords, or whatever idiomatic way is possible
-                    /// But explictly comparing identifier values with known keywords is suitable here.
+                    // We could define a map of keywords, or whatever idiomatic way is possible
+                    // But explictly comparing identifier values with known keywords is suitable here.
                     let value = self.source[start..self.pos].to_string();
                     if value == "let" {
                         return Some(Token::Let)
+                    } else if value == "fn" {
+                        return Some(Token::Fn)
                     }
 
                     return Some(Token::Ident(value));
@@ -165,6 +174,11 @@ enum Stmt {
     Let {
         name: String,
         value: Expr,
+    },
+    FnDecl {
+        name: String,
+        params: Vec<Expr>,
+        body: Vec<Stmt>,
     }
 }
 
@@ -227,6 +241,7 @@ impl<'a> Parser<'a> {
     fn parse_stmt(&mut self) -> Result<Stmt, ParseErr> {
         match self.current {
             Some(Token::Let) => self.parse_let(),
+            Some(Token::Fn) => self.parse_fn_decl(),
             _ => Ok(Stmt::Expr(self.parse_expr()?)),
         }
     }
@@ -305,19 +320,7 @@ impl<'a> Parser<'a> {
     fn parse_call(&mut self, callee: String) -> Result<Expr, ParseErr> {
         self.expect(Token::LParen, "expected '('")?;
 
-        let mut args: Vec<Expr> = vec![];
-        // So while we're not matching against a ')' currently...
-        while !matches!(self.current, Some(Token::RParen)) {
-            // push args onto the vector
-            args.push(self.parse_expr()?);
-
-            // if we are a comma, then consume, else that's the end of the args list.
-            if matches!(self.current, Some(Token::Comma)) {
-                self.consume();
-            } else {
-                break;
-            }
-        }
+        let args = self.parse_list_of_exprs(RParen)?;
 
         // Expect the closing parenthesis
         self.expect(Token::RParen, "expected ')'")?;
@@ -328,19 +331,7 @@ impl<'a> Parser<'a> {
     /// Parse a list
     /// Grammar being parsed: list  <- '[' (_ expr ',' _)* ']'
     fn parse_list(&mut self) -> Result<Expr, ParseErr> {
-        let mut elements: Vec<Expr> = vec![];
-        // So while we're not matching against a ']' currently...
-        while !matches!(self.current, Some(Token::RBrace)) {
-            elements.push(self.parse_expr()?);
-
-            // if we are a comma, then consume, else that's the end of the list.
-            if matches!(self.current, Some(Token::Comma)) {
-                self.consume();
-            } else {
-                break;
-            }
-        }
-
+        let elements = self.parse_list_of_exprs(RBrace)?;
         self.expect(Token::RBrace, "expected ']'")?;
 
         Ok(Expr::List(elements))
@@ -352,11 +343,7 @@ impl<'a> Parser<'a> {
         self.expect(Token::Let, "expected 'let'")?;
 
         // the next token would be an identifier, so expect it.
-        let name = match self.consume() {
-            Some(Token::Ident(s)) => s,
-            Some(t) => return Err(ParseErr::UnexpectedToken(t)),
-            None => return Err(ParseErr::UnexpectedEof),
-        };
+        let name = self.get_identifier_value()?;
 
         // expect '=' after let name.
         self.expect(Token::Eq, "expected '=' after name")?;
@@ -368,6 +355,76 @@ impl<'a> Parser<'a> {
             name,
             value
         })
+    }
+
+    /// Parse a function declaration and body
+    /// Grammar: func_decl <- 'fn' ident '(' (ident (',' ident)*)? ')' '{' stmt* '}'
+    fn parse_fn_decl(&mut self) -> Result<Stmt, ParseErr> {
+        self.expect(Token::Fn, "expected 'fn'")?;
+
+        // the next token would be an identifier, so expect it.
+        let name = self.get_identifier_value()?;
+
+        self.expect(Token::LParen, "expected '(' after name")?;
+
+        let params = self.parse_list_of_exprs(Token::RParen)?;
+
+        // expect the closing parenthesis
+        self.expect(Token::RParen, "expected ')'")?;
+
+        let body = self.parse_block()?;
+
+        Ok(Stmt::FnDecl {
+            name,
+            params,
+            body,
+        })
+    }
+
+    fn parse_list_of_exprs(&mut self, delim: Token) -> Result<Vec<Expr>, ParseErr> {
+        let mut exprs: Vec<Expr> = vec![];
+
+        if self.current.as_ref() == Some(&delim) {
+            return Ok(exprs);
+        }
+
+        loop {
+            exprs.push(self.parse_expr()?);
+
+            if self.current.as_ref() == Some(&delim) {
+                break;
+            }
+
+            self.expect(Token::Comma, "expected ','")?;
+        }
+
+        Ok(exprs)
+    }
+
+    fn parse_block(&mut self) -> Result<Vec<Stmt>, ParseErr> {
+        self.expect(Token::LCurl, "expected '{'")?;
+
+        let mut stmts = vec![];
+        // So while we're not matching against a '}' currently...
+        while !matches!(self.current, Some(Token::RCurl)) {
+            if self.current.is_none() {
+                return Err(ParseErr::UnexpectedEof);
+            }
+
+            stmts.push(self.parse_stmt()?);
+        }
+
+        self.expect(Token::RCurl, "expected '}'")?;
+
+        Ok(stmts)
+    }
+
+    fn get_identifier_value(&mut self) -> Result<String, ParseErr> {
+        match self.consume() {
+            Some(Token::Ident(s)) => Ok(s),
+            Some(t) => return Err(ParseErr::UnexpectedToken(t)),
+            None => return Err(ParseErr::UnexpectedEof),
+        }
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -397,7 +454,7 @@ fn eval(expr: Expr) -> f64 {
 
 fn main() {
     // now lets test it!!
-    let source = r#"let x = 10 + 20 print(x)"#;
+    let source = r#"fn test(a, b) { let x = a + b print(x) }"#;
     let mut parser = Parser::new(source);
     let program = parser.parse().unwrap();
     println!("{:#?}", program.stmts);

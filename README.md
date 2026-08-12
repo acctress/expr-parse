@@ -6,19 +6,21 @@ A simple to follow "template" recursive descent expression parser project, can b
 
 This adaptation of the parser parses this grammar, using PEG notation:
 ```
-program  <- stmt*
+program   <- stmt*
 
-stmt     <- let_stmt
+stmt      <- let_stmt
           / expr
 
-let_stmt <- 'let' ident '=' expr
+func_decl <- 'fn' ident '(' (ident (',' ident)*)? ')' '{' stmt* '}'
 
-expr     <- term ([+-] term)*
-term     <- factor ([*/] factor)*
-factor   <- number
-          / string
-          / ident
-          / call
-          / list
-          / '(' expr ')'
+let_stmt  <- 'let' ident '=' expr
+
+expr      <- term ([+-] term)*
+term      <- factor ([*/] factor)*
+factor    <- number
+           / string
+           / ident
+           / call
+           / list
+           / '(' expr ')'
 ```
