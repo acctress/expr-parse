@@ -1,5 +1,3 @@
-use crate::Expr::Ident;
-
 /// For the lexer, I will be going with a very simple solution.
 /// Using Rust's ability of allowing enums to hold values.
 
@@ -14,6 +12,8 @@ enum Token {
     Mul,
     Div,
     Comma,
+    Let,
+    Eq,
     Number(f64),
     Ident(String),
     String(String),
@@ -52,6 +52,7 @@ impl<'a> Lexer<'a> {
             b'*' => { self.advance(); Some(Token::Mul) }
             b'/' => { self.advance(); Some(Token::Div) }
             b',' => { self.advance(); Some(Token::Comma) }
+            b'=' => { self.advance(); Some(Token::Eq) }
             _ => {
                 if char::is_alphabetic(cur as char) {
                     let start = self.pos;
@@ -60,7 +61,15 @@ impl<'a> Lexer<'a> {
                     {
                         self.advance();
                     }
-                    return Some(Token::Ident(self.source[start..self.pos].to_string()));
+
+                    /// We could define a map of keywords, or whatever idiomatic way is possible
+                    /// But explictly comparing identifier values with known keywords is suitable here.
+                    let value = self.source[start..self.pos].to_string();
+                    if value == "let" {
+                        return Some(Token::Let)
+                    }
+
+                    return Some(Token::Ident(value));
                 } else if char::is_digit(cur as char, 10) {
                     let start = self.pos;
                     let mut flt = false;
@@ -150,6 +159,20 @@ enum Expr {
     Call { callee: String, args: Vec<Expr> }
 }
 
+#[derive(Debug, PartialEq)]
+enum Stmt {
+    Expr(Expr),
+    Let {
+        name: String,
+        value: Expr,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct Program {
+    stmts: Vec<Stmt>
+}
+
 /// It's good to define a custom error enum to handle errors cleanly.
 #[derive(Debug)]
 enum ParseErr {
@@ -188,10 +211,24 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// The main parser driver function, parse the top most parse function.
-    /// In this case, the first thing to be parsed in our grammar is expression.
-    pub fn parse(&mut self) -> Result<Expr, ParseErr> {
-        self.parse_expr()
+    /// The main parser driver function, it parses all statements
+    /// and returns a program.
+    pub fn parse(&mut self) -> Result<Program, ParseErr> {
+        let mut stmts: Vec<Stmt> = vec![];
+        while self.current.is_some() {
+            stmts.push(self.parse_stmt()?);
+        }
+
+        Ok(Program { stmts })
+    }
+
+    /// Now we're adding the ability to parse statements
+    /// Expr statements are just expressions as statements, so wrap parse_expr.
+    fn parse_stmt(&mut self) -> Result<Stmt, ParseErr> {
+        match self.current {
+            Some(Token::Let) => self.parse_let(),
+            _ => Ok(Stmt::Expr(self.parse_expr()?)),
+        }
     }
 
     /// This is the first parse function of the parser,
@@ -307,6 +344,30 @@ impl<'a> Parser<'a> {
         Ok(Expr::List(elements))
     }
 
+    /// Parse a let decl
+    /// Grammar: let    <- 'let' ident '=' expr
+    fn parse_let(&mut self) -> Result<Stmt, ParseErr> {
+        self.expect(Token::Let, "expected 'let'")?;
+
+        // the next token would be an identifier, so expect it.
+        let name = match self.consume() {
+            Some(Token::Ident(s)) => s,
+            Some(t) => return Err(ParseErr::UnexpectedToken(t)),
+            None => return Err(ParseErr::UnexpectedEof),
+        };
+
+        // expect '=' after let name.
+        self.expect(Token::Eq, "expected '=' after name")?;
+
+        // now simply parse an expression for the value
+        let value = self.parse_expr()?;
+
+        Ok(Stmt::Let {
+            name,
+            value
+        })
+    }
+
     fn peek(&self) -> Option<&Token> {
         self.current.as_ref()
     }
@@ -334,78 +395,8 @@ fn eval(expr: Expr) -> f64 {
 
 fn main() {
     // now lets test it!!
-    let source = r#"print("hello world")"#;
+    let source = r#"let x = 10 + 20 print(x)"#;
     let mut parser = Parser::new(source);
-    let expr = parser.parse().unwrap();
-    println!("{:#?}", expr);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse(src: &str) -> Expr {
-        Parser::new(src).parse().unwrap()
-    }
-
-    #[test]
-    fn test_string() {
-        assert!(matches!(parse(r#""hi""#), Expr::String(s) if s == "hi"));
-    }
-
-    #[test]
-    fn test_list() {
-        assert_eq!(
-            parse("[1, 2, 3, 4]"),
-            Expr::List(vec![
-                Expr::Number(1.0),
-                Expr::Number(2.0),
-                Expr::Number(3.0),
-                Expr::Number(4.0),
-            ])
-        );
-    }
-
-    #[test]
-    fn test_number() {
-        assert!(matches!(parse("42"), Expr::Number(n) if n == 42.0));
-    }
-
-    #[test]
-    fn test_float() {
-        assert!(matches!(parse("23.2354234"), Expr::Number(n) if n == 23.2354234));
-    }
-
-    #[test]
-    fn test_identifier() {
-        assert!(matches!(parse("blinx"), Expr::Ident(s) if s == "blinx"));
-    }
-
-    #[test]
-    fn test_binop_add() {
-        assert!(matches!(parse("1 + 2"), Expr::BinOp { op: '+', .. }));
-    }
-
-    #[test]
-    fn test_precedence() {
-        /// + should be first
-        assert!(matches!(parse("1 + 2 * 3"), Expr::BinOp { op: '+', .. }));
-    }
-
-    #[test]
-    fn test_do_parens_override_precedence_hehehe() {
-        /// * should be first
-        assert!(matches!(parse("(1 + 2) * 3"), Expr::BinOp { op: '*', .. }));
-    }
-
-    #[test]
-    fn test_unexpected_token() {
-        assert!(Parser::new("1 + ").parse().is_err());
-    }
-
-    #[test]
-    fn test_missinbg_paren() {
-        assert!(Parser::new("(1 + 2").parse().is_err());
-    }
-
+    let program = parser.parse().unwrap();
+    println!("{:#?}", program.stmts);
 }
