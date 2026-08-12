@@ -176,7 +176,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn advance(&mut self) {
-        if self.pos < self.source.len() { self.pos += 1; }
+        if self.not_eof() { self.pos += 1; }
     }
 
     fn skip_ws(&mut self) {
