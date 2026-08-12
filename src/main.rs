@@ -355,17 +355,15 @@ mod tests {
 
     #[test]
     fn test_list() {
-        let e = parse("[1, 2, 3, 4]");
-        println!("{:#?}", e);
-        assert!(matches!(
-            e,
-            Expr::List(items) if items == vec![
+        assert_eq!(
+            parse("[1, 2, 3, 4]"),
+            Expr::List(vec![
                 Expr::Number(1.0),
                 Expr::Number(2.0),
                 Expr::Number(3.0),
                 Expr::Number(4.0),
-            ]
-        ));
+            ])
+        );
     }
 
     #[test]
