@@ -213,6 +213,10 @@ enum Expr {
         cond: Box<Expr>,
         then: Vec<Stmt>,
         else_: Option<Vec<Stmt>>,
+    },
+    Lambda {
+        params: Option<Vec<Expr>>,
+        value: Box<Expr>
     }
 }
 
@@ -403,7 +407,28 @@ impl<'a> Parser<'a> {
                 let expr = self.parse_expr()?; // this is what makes this recursive descent
                 self.expect(Token::RParen, "expected ')'")?;
                 Ok(expr)
-            }
+            },
+            Some(Token::Fn)         => {
+                self.expect(Token::LParen, "expected '(' after `fn` to create an anonymous function")?;
+                let params = if self.peek() == Some(&Token::RParen) {
+                    self.consume();
+                    None
+                } else {
+                    Some(self.parse_list_of_exprs(Token::RParen)?)
+                };
+
+                self.expect(Token::RParen, "expected ')' after params")?;
+                self.expect(Token::LCurl, "expected '{' after function params")?;
+                
+                let value = self.parse_expr()?;
+                
+                self.expect(Token::RCurl, "expected '}' to close function body")?;
+                
+                Ok(Expr::Lambda {
+                    params,
+                    value: Box::new(value)
+                })
+            },
             Some(t) => Err(ParseErr::UnexpectedToken(t)),
             None    => Err(ParseErr::UnexpectedEof),
         }
@@ -590,7 +615,7 @@ impl<'a> Parser<'a> {
 
 fn main() {
     // now lets test it!!
-    let source = r#"let x = if 2 == 2 { 2 } else { 4 }"#;
+    let source = r#"let x = fn(a) { if a == 1 { a } else { 2 } }"#;
     println!("{source}");
     let mut parser = Parser::new(source);
     let program = parser.parse().unwrap();
